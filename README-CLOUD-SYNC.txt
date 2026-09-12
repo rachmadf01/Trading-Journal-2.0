@@ -1,29 +1,22 @@
-TRADING JOURNAL 2.2 — OFFLINE FIRST + CLOUD SYNC
+TRADING JOURNAL 3.0 — MULTI-ACCOUNT
 
-Files:
-- index.html
-- sw.js
-- manifest.webmanifest
-- icon-180.png / icon-512.png
-- supabase-setup.sql
+What changed:
+- Multiple trading accounts / workspaces.
+- Quick account switcher in the top bar.
+- Each account has its own trades, PnL/statistics and account settings.
+- Existing local trades are automatically assigned to Main Account during migration.
+- Supabase cloud sync now stores accounts + account_id on trades.
+- Supabase session persistence remains enabled: do NOT press Logout if you want automatic login.
+- No recurring first-login merge confirmation. After the initial migration, the app silently syncs.
+- Offline-first queue remains active.
 
-Setup:
-1. Create a Supabase project (Free plan is enough for a personal journal).
-2. SQL Editor -> paste supabase-setup.sql -> Run.
-3. Project Settings -> API -> copy Project URL + Publishable/anon key.
-4. Deploy all files to GitHub Pages root.
-5. On each device, open the same GitHub Pages URL.
-6. Cloud Sync -> enter URL/key. Login or create an account. Use the SAME account on every device.
+SUPABASE:
+1. Run supabase-setup.sql in SQL Editor.
+2. Keep the browser key as Publishable/anon only. Never use service_role/secret key.
+3. Keep the existing Site URL / Redirect URL pointing to the GitHub Pages site.
 
-OFFLINE-FIRST:
-- Trades always save to localStorage first.
-- If offline, changes remain on-device and are queued.
-- When internet returns, the app attempts a full snapshot sync.
-- Sync handles add/edit/delete/import/replace/clear consistently.
-- If a pending queue exists, the app pushes local state before pulling cloud state, reducing accidental overwrite of offline changes.
+AUTO LOGIN:
+The app uses Supabase persistSession=true and autoRefreshToken=true. The login session is stored by the browser/PWA. If browser site data is cleared, private/incognito mode is used, or the user explicitly logs out, login will be required again.
 
-IMPORTANT:
-- Never put a service_role key in the browser. Use only the publishable/anon key.
-- GitHub Pages repo can be public, so do not commit private trading data.
-- Export JSON backups periodically.
-- Cloud sync is not instant realtime; it refreshes on save, when returning to the app, when internet comes back, or with Sync Now.
+UPGRADE:
+Replace the GitHub Pages index.html and supporting files with this package. Existing localStorage keys remain compatible with 2.2.

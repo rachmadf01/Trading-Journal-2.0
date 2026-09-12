@@ -953,6 +953,8 @@ button,input,select,textarea{font:inherit}
   main{min-width:0}
 }
 
+
+.account-switcher{display:flex;align-items:center;gap:7px;padding:4px 7px 4px 9px;border:1px solid var(--border);background:var(--surface);border-radius:12px;min-width:0}.account-label{font-size:9px;font-weight:800;letter-spacing:.08em;color:var(--text-3)}#account-select{border:0;background:transparent;color:var(--text);font-weight:800;max-width:150px;outline:none;min-height:30px}.account-add{width:28px;height:28px;border:0;border-radius:8px;background:var(--surface-2);color:var(--text);font-size:20px;line-height:1;cursor:pointer}.topbar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}@media(max-width:600px){.account-switcher{max-width:62vw}.account-label{display:none}#account-select{max-width:42vw;font-size:12px}.cloud-btn{padding:8px 9px!important}.live-label{display:none}}
 </style>
 
 <link rel="manifest" href="manifest.webmanifest">
@@ -989,7 +991,7 @@ button,input,select,textarea{font:inherit}
   <!-- Top bar -->
   <header class="topbar">
     <h1 id="view-title">Dashboard</h1>
-    <div class="topbar-actions" id="topbar-actions"><span class="live-label" style="font-size:11px;color:var(--text-3);font-weight:700;">LIVE JOURNAL</span><button class="cloud-btn" id="cloud-btn" type="button"><span class="cloud-dot" id="cloud-dot"></span><span id="cloud-label">Cloud Sync</span></button></div>
+    <div class="topbar-actions" id="topbar-actions"><div class="account-switcher" id="account-switcher"><span class="account-label">ACCOUNT</span><select id="account-select" aria-label="Trading account"></select><button class="account-add" id="account-add" type="button" title="Add trading account">+</button></div><button class="cloud-btn" id="cloud-btn" type="button"><span class="cloud-dot" id="cloud-dot"></span><span id="cloud-label">Cloud Sync</span></button></div>
   </header>
 
   <!-- Main content -->
@@ -1111,6 +1113,10 @@ button,input,select,textarea{font:inherit}
         </button>
       </div>
       <form id="trade-form">
+        <div class="field">
+          <label class="field-label" for="f-account">Trading Account</label>
+          <select class="input" id="f-account"></select>
+        </div>
         <div class="field">
           <label class="field-label" for="f-date">Date</label>
           <input type="date" class="input" id="f-date" required>
@@ -1243,6 +1249,35 @@ function toast(msg, type){
    ============================================================ */
 
 /* ============================================================
+   MULTI-ACCOUNT — local workspace
+   ============================================================ */
+const AccountStore = {
+  KEY:'tpj_accounts_v1', ACTIVE:'tpj_active_account_v1', _cache:null,
+  uid(){ return 'acc_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8); },
+  load(){
+    if(this._cache) return this._cache;
+    let a=[]; try{a=JSON.parse(localStorage.getItem(this.KEY)||'[]')}catch(e){}
+    if(!Array.isArray(a)) a=[];
+    if(!a.length){
+      a=[{id:this.uid(),name:'Main Account',broker:'',type:'Prop / Personal',initialBalance:0,createdAt:Date.now()}];
+      localStorage.setItem(this.KEY,JSON.stringify(a));
+    }
+    this._cache=a; this.migrateTrades(); return a;
+  },
+  activeId(){ this.load(); let id=localStorage.getItem(this.ACTIVE); if(!this._cache.some(a=>a.id===id)){id=this._cache[0].id;localStorage.setItem(this.ACTIVE,id)} return id; },
+  active(){return this.load().find(a=>a.id===this.activeId())||this.load()[0];},
+  setActive(id){if(this.load().some(a=>a.id===id)){localStorage.setItem(this.ACTIVE,id);Store._cache=null;Store._settings=null;UI.render();if(window.CloudSync&&CloudSync.user)CloudSync.pullLatest(true);}},
+  add(data){const a={id:this.uid(),name:(data.name||'New Account').trim()||'New Account',broker:(data.broker||'').trim(),type:data.type||'Prop / Personal',initialBalance:Number(data.initialBalance)||0,createdAt:Date.now()};this.load().push(a);localStorage.setItem(this.KEY,JSON.stringify(this._cache));localStorage.setItem(this.ACTIVE,a.id);Store._cache=null;Store._settings=null;if(window.CloudSync)CloudSync.enqueue('accounts',{action:'save'});if(window.CloudSync?.user&&navigator.onLine)CloudSync.flushQueue();UI.render();return a;},
+  update(id,patch){const a=this.load().find(x=>x.id===id);if(!a)return null;Object.assign(a,patch);localStorage.setItem(this.KEY,JSON.stringify(this._cache));if(window.CloudSync)CloudSync.enqueue('accounts',{action:'save'});if(window.CloudSync?.user&&navigator.onLine)CloudSync.flushQueue();UI.render();return a;},
+  remove(id){if(this.load().length<=1)return false;this._cache=this._cache.filter(a=>a.id!==id);localStorage.setItem(this.KEY,JSON.stringify(this._cache));if(this.activeId()===id)localStorage.setItem(this.ACTIVE,this._cache[0].id);Store._cache=null;Store._settings=null;if(window.CloudSync)CloudSync.enqueue('accounts',{action:'save'});if(window.CloudSync?.user&&navigator.onLine)CloudSync.flushQueue();UI.render();return true;},
+  migrateTrades(){
+    const accounts=this._cache; const def=accounts[0]; let changed=false;
+    try{const raw=JSON.parse(localStorage.getItem('tpj_trades_v1')||'[]'); if(Array.isArray(raw)){raw.forEach(t=>{if(!t.accountId){t.accountId=def.id;changed=true;}});if(changed)localStorage.setItem('tpj_trades_v1',JSON.stringify(raw));}}catch(e){}
+  },
+  all(){return this.load();}
+};
+
+/* ============================================================
    CLOUD SYNC — Supabase
    ============================================================ */
 const CloudSync = {
@@ -1303,40 +1338,46 @@ const CloudSync = {
   async signUp(email,password){if(!this.ready)return toast('Save your Supabase connection first','error');if(!email||password.length<6)return toast('Enter email and password (min 6 chars)','error');const {error}=await this.client.auth.signUp({email,password});if(error)return toast(error.message,'error');toast('Account created. Check email if confirmation is enabled.','success');},
   async signIn(email,password){if(!this.ready)return toast('Save your Supabase connection first','error');const {error}=await this.client.auth.signInWithPassword({email,password});if(error)return toast(error.message,'error');toast('Cloud login successful','success');},
   async signOut(){if(this.client){await this.client.auth.signOut();this.user=null;this.updateUI();toast('Logged out from cloud','success');}},
-  cloudToLocal(row){return Store._sanitizeTrade({id:row.id,date:row.date,timestamp:Number(row.timestamp)||Date.now(),result:row.result,pnl:Number(row.pnl),symbol:row.symbol||'',entryTime:row.entry_time||'',notes:row.notes||''});},
+  cloudToLocal(row){return Store._sanitizeTrade({id:row.id,date:row.date,timestamp:Number(row.timestamp)||Date.now(),result:row.result,pnl:Number(row.pnl),symbol:row.symbol||'',entryTime:row.entry_time||'',notes:row.notes||'',accountId:row.account_id||AccountStore.activeId()});},
   async onLogin(){
     if(!this.user||!this.ready||this._choicePending||!navigator.onLine)return;
     this._choicePending=true;
     try{
-      const {data:cloudTrades,error}=await this.client.from('tpj_trades').select('*').order('timestamp',{ascending:true}); if(error)throw error;
-      const local=Store.getTrades();
-      if((cloudTrades||[]).length===0&&local.length>0){
-        const ok=confirm(`Cloud masih kosong, sedangkan perangkat ini punya ${local.length} trade.\n\nOK = upload data lokal ke cloud\nCancel = tetap simpan lokal tanpa upload sekarang`);
-        if(ok) await this.syncSnapshot();
-      }else if((cloudTrades||[]).length>0){
-        const ok=confirm(`Cloud punya ${cloudTrades.length} trade.\n\nOK = gunakan data cloud di perangkat ini\nCancel = gabungkan data lokal + cloud`);
-        if(ok)this.applyCloudTrades(cloudTrades); else await this.mergeLocalAndCloud(cloudTrades);
-        const {data:cs}=await this.client.from('tpj_settings').select('settings').maybeSingle();
-        if(cs?.settings){Store._settings=Object.assign({},Store.defaultSettings(),cs.settings);Store._save(Store.KEY_SETTINGS,Store._settings);}
-      }
-      UI.render();toast('Cloud sync ready','success');
+      const {data:cloudAccounts,error:ae}=await this.client.from('tpj_accounts').select('*').order('created_at',{ascending:true});
+      if(ae)throw ae;
+      const localAccounts=AccountStore.all();
+      if((cloudAccounts||[]).length){
+        const localRaw=Store._allLocalRawTrades(); const localDefault=localAccounts[0]; const map=new Map(localAccounts.map(a=>[a.id,a]));
+        if(localAccounts.length===1&&localDefault.name==='Main Account'&&!localDefault.broker&&localRaw.length===0)map.clear();
+        (cloudAccounts||[]).forEach(r=>map.set(r.id,{id:r.id,name:r.name||'Account',broker:r.broker||'',type:r.type||'Prop / Personal',initialBalance:Number(r.initial_balance)||0,createdAt:Date.parse(r.created_at)||Date.now()}));
+        AccountStore._cache=[...map.values()];localStorage.setItem(AccountStore.KEY,JSON.stringify(AccountStore._cache));
+      } else { await this.syncSnapshot(); }
+      await this.pullLatest(true);
+      this.setStatus('ok');
     }catch(e){console.error(e);this.setStatus('error','Sync error');toast('Cloud sync failed: '+e.message,'error');}
-    finally{this._choicePending=false;}
+    finally{this._choicePending=false;localStorage.setItem('tpj_cloud_migrated_'+this.user.id,'1');}
   },
   applyCloudTrades(rows){Store._cache=(rows||[]).map(r=>this.cloudToLocal(r)).filter(Boolean);Store._save(Store.KEY_TRADES,Store._cache);},
   async mergeLocalAndCloud(rows){const map=new Map(Store.getTrades().map(t=>[t.id,t]));(rows||[]).forEach(r=>{const t=this.cloudToLocal(r);if(t&&!map.has(t.id))map.set(t.id,t);});Store._cache=[...map.values()];Store._save(Store.KEY_TRADES,Store._cache);await this.syncSnapshot();},
   async syncSnapshot(){
     if(!this.user||!this.ready||!navigator.onLine)return false;
     this.setStatus('sync');
-    const local=Store.getTrades();
-    const rows=local.map(t=>({id:t.id,user_id:this.user.id,date:t.date,timestamp:t.timestamp,result:t.result,pnl:t.pnl,symbol:t.symbol,entry_time:t.entryTime,notes:t.notes,updated_at:new Date().toISOString()}));
+    const accounts=AccountStore.all();
+    const arows=accounts.map(a=>({id:a.id,user_id:this.user.id,name:a.name,broker:a.broker||'',type:a.type||'Prop / Personal',initial_balance:a.initialBalance||0,created_at:new Date(a.createdAt||Date.now()).toISOString(),updated_at:new Date().toISOString()}));
+    if(arows.length){const {error}=await this.client.from('tpj_accounts').upsert(arows,{onConflict:'user_id,id'});if(error)throw error;}
+    const raw=Store._allLocalRawTrades();
+    const rows=raw.map(t=>({id:t.id,user_id:this.user.id,account_id:t.accountId||accounts[0].id,date:t.date,timestamp:t.timestamp,result:t.result,pnl:t.pnl,symbol:t.symbol,entry_time:t.entryTime,notes:t.notes,updated_at:new Date().toISOString()}));
     if(rows.length){const {error}=await this.client.from('tpj_trades').upsert(rows,{onConflict:'user_id,id'});if(error)throw error;}
     const {data:cloudIds,error:ce}=await this.client.from('tpj_trades').select('id');if(ce)throw ce;
-    const localIds=new Set(local.map(t=>t.id));const stale=(cloudIds||[]).map(x=>x.id).filter(id=>!localIds.has(id));
+    const localIds=new Set(raw.map(t=>t.id));const stale=(cloudIds||[]).map(x=>x.id).filter(id=>!localIds.has(id));
     if(stale.length){const {error}=await this.client.from('tpj_trades').delete().eq('user_id',this.user.id).in('id',stale);if(error)throw error;}
-    const {error:se}=await this.client.from('tpj_settings').upsert({user_id:this.user.id,settings:Store.getSettings(),updated_at:new Date().toISOString()},{onConflict:'user_id'});if(se)throw se;
+    const {data:ca,error:cae}=await this.client.from('tpj_accounts').select('id');if(cae)throw cae;
+    const localAids=new Set(accounts.map(a=>a.id));const staleA=(ca||[]).map(x=>x.id).filter(id=>!localAids.has(id));
+    if(staleA.length){const {error}=await this.client.from('tpj_accounts').delete().eq('user_id',this.user.id).in('id',staleA);if(error)throw error;}
+    const {error:se}=await this.client.from('tpj_settings').upsert({user_id:this.user.id,account_id:AccountStore.activeId(),settings:Store.getSettings(),updated_at:new Date().toISOString()},{onConflict:'user_id,account_id'});if(se)throw se;
     this.saveQueue([]);this.setStatus('ok');return true;
   },
+
   async flushQueue(){
     if(!this.user||!this.ready||!navigator.onLine||this.syncing)return false;
     // Snapshot sync is intentionally used: it handles creates, edits, deletes and imports consistently.
@@ -1355,8 +1396,18 @@ const CloudSync = {
     if(!this.user||!this.ready||!navigator.onLine||this.syncing)return;
     if(this.queue().length){await this.flushQueue();return;}
     this.syncing=true;this.setStatus('sync');
-    try{const {data:rows,error}=await this.client.from('tpj_trades').select('*').order('timestamp',{ascending:true});if(error)throw error;this.applyCloudTrades(rows||[]);const {data:cs}=await this.client.from('tpj_settings').select('settings').maybeSingle();if(cs?.settings){Store._settings=Object.assign({},Store.defaultSettings(),cs.settings);Store._save(Store.KEY_SETTINGS,Store._settings);}this.setStatus('ok');UI.render();if(!silent)toast('Latest cloud data loaded','success');}
-    catch(e){console.error(e);this.setStatus('error','Sync error');if(!silent)toast('Sync failed: '+e.message,'error');}finally{this.syncing=false;}
+    try{
+      const {data:ar,error:ae}=await this.client.from('tpj_accounts').select('*').order('created_at',{ascending:true});if(ae)throw ae;
+      if(ar&&ar.length){AccountStore._cache=ar.map(r=>({id:r.id,name:r.name||'Account',broker:r.broker||'',type:r.type||'Prop / Personal',initialBalance:Number(r.initial_balance)||0,createdAt:Date.parse(r.created_at)||Date.now()}));localStorage.setItem(AccountStore.KEY,JSON.stringify(AccountStore._cache));if(!AccountStore.active())localStorage.setItem(AccountStore.ACTIVE,AccountStore._cache[0].id);}
+      const {data:rows,error}=await this.client.from('tpj_trades').select('*').order('timestamp',{ascending:true});if(error)throw error;
+      const all=(rows||[]).map(r=>this.cloudToLocal(r)).filter(Boolean);
+      let raw=[];try{raw=JSON.parse(localStorage.getItem(Store.KEY_TRADES)||'[]')}catch(e){}
+      const currentA=AccountStore.activeId(); const other=Array.isArray(raw)?raw.filter(t=>(t.accountId||currentA)!==currentA):[];
+      const merged=[...other,...all];Store._cache=merged.filter(t=>(t.accountId||currentA)===currentA);localStorage.setItem(Store.KEY_TRADES,JSON.stringify(merged));
+      const {data:cs}=await this.client.from('tpj_settings').select('settings').eq('account_id',currentA).maybeSingle();if(cs?.settings){Store._settings=Object.assign({},Store.defaultSettings(),cs.settings);let sm=Store._load('tpj_settings_by_account_v1',{});if(!sm||typeof sm!=='object'||Array.isArray(sm))sm={};sm[currentA]=Store._settings;Store._save('tpj_settings_by_account_v1',sm);Store._save(Store.KEY_SETTINGS,Store._settings);}
+      this.updateUI();if(!silent)toast('Cloud data refreshed','success');
+    }catch(e){console.error(e);this.setStatus('error','Sync error');if(!silent)toast('Cloud refresh failed: '+e.message,'error');}
+    finally{this.syncing=false;this.setStatus(navigator.onLine?'ok':'ready');}
   },
   async syncNow(){if(!this.user)return toast('Login to cloud first','error');if(!navigator.onLine)return toast('No internet — changes are safely queued','error');try{await this.flushQueue();await this.pullLatest(true);toast('Synced to cloud','success');}catch(e){toast('Sync failed: '+e.message,'error');}},
   open(){const m=document.getElementById('cloud-modal');if(!m)return;const c=this.cfg();document.getElementById('cloud-url').value=c.url||'';document.getElementById('cloud-key').value=c.key||'';m.classList.add('open');m.setAttribute('aria-hidden','false');this.updateUI();},
@@ -1411,8 +1462,11 @@ const Store = {
     }
   },
 
+  _allLocalRawTrades(){let raw=this._load(this.KEY_TRADES,[]);return Array.isArray(raw)?raw.map(t=>this._sanitizeTrade(t)).filter(Boolean):[];},
+
   getTrades(){
     if(this._cache !== null) return this._cache;
+    AccountStore.load(); const activeId=AccountStore.activeId();
     let data = this._load(this.KEY_TRADES, null);
     if(data === null){
       this._cache = [];
@@ -1426,7 +1480,7 @@ const Store = {
       return this._cache;
     }
     // validate / sanitize
-    this._cache = data.map(t => this._sanitizeTrade(t)).filter(Boolean);
+    this._cache = data.map(t => this._sanitizeTrade(t)).filter(Boolean).filter(t => t.accountId===activeId);
     // if any were dropped, persist cleaned version
     if(this._cache.length !== data.length){
       this._save(this.KEY_TRADES, this._cache);
@@ -1449,33 +1503,49 @@ const Store = {
       pnl: pnl,
       symbol: typeof t.symbol === 'string' ? t.symbol : '',
       notes: typeof t.notes === 'string' ? t.notes : '',
-      entryTime: typeof t.entryTime === 'string' ? t.entryTime : ''
+      entryTime: typeof t.entryTime === 'string' ? t.entryTime : '',
+      accountId: typeof t.accountId === 'string' ? t.accountId : AccountStore.activeId()
     };
+  },
+
+  getTradesForAccount(accountId){
+    const raw=this._load(this.KEY_TRADES,[]);
+    return Array.isArray(raw)?raw.map(t=>this._sanitizeTrade(t)).filter(Boolean).filter(t=>t.accountId===accountId):[];
   },
 
   getSettings(){
     if(this._settings !== null) return this._settings;
-    let s = this._load(this.KEY_SETTINGS, null);
-    if(s === null || typeof s !== 'object'){
-      s = this.defaultSettings();
-      this._save(this.KEY_SETTINGS, s);
+    const aid=AccountStore.activeId();
+    let map=this._load('tpj_settings_by_account_v1',{});
+    if(!map || typeof map!=='object' || Array.isArray(map)) map={};
+    let st=map[aid];
+    if(!st){
+      const legacy=this._load(this.KEY_SETTINGS,null);
+      st=(legacy&&typeof legacy==='object')?legacy:this.defaultSettings();
+      map[aid]=st; this._save('tpj_settings_by_account_v1',map);
     }
-    // merge with defaults to handle new keys
-    const def = this.defaultSettings();
-    this._settings = Object.assign({}, def, s);
+    this._settings=Object.assign({},this.defaultSettings(),st);
     return this._settings;
   },
 
   saveSettings(s){
-    this._settings = Object.assign({}, this.getSettings(), s);
-    this._save(this.KEY_SETTINGS, this._settings);
+    const aid=AccountStore.activeId();
+    this._settings=Object.assign({},this.getSettings(),s);
+    let map=this._load('tpj_settings_by_account_v1',{});
+    if(!map||typeof map!=='object'||Array.isArray(map))map={};
+    map[aid]=this._settings;
+    this._save('tpj_settings_by_account_v1',map);
+    this._save(this.KEY_SETTINGS,this._settings);
     if(window.CloudSync) CloudSync.saveSettings(this._settings);
     return this._settings;
   },
 
   saveTrades(sync=true){
     if(this._cache !== null){
-      const ok=this._save(this.KEY_TRADES, this._cache);
+      let raw=this._load(this.KEY_TRADES,[]); if(!Array.isArray(raw)) raw=[]; const activeId=AccountStore.activeId(); const ids=new Set(this._cache.map(t=>t.id));
+      raw=raw.filter(t => (t.accountId||activeId)!==activeId || ids.has(t.id));
+      const byId=new Map(raw.map(t=>[t.id,t])); this._cache.forEach(t=>byId.set(t.id,t)); raw=[...byId.values()];
+      const ok=this._save(this.KEY_TRADES, raw);
       if(ok && sync && window.CloudSync && CloudSync.user){
         if(navigator.onLine) CloudSync.flushQueue().catch(()=>{});
         else CloudSync.enqueue('snapshot',{action:'offline-save'});
@@ -1951,6 +2021,7 @@ const UI = {
   },
 
   init(){
+    AccountStore.load();
     this.applyTheme();
     this.bindEvents();
     this.render();
@@ -1987,9 +2058,10 @@ const UI = {
   },
 
   renderTopActions(){
-    const el = $('#topbar-actions');
-    el.innerHTML = '';
-    // no topbar actions for now
+    const sel=$('#account-select'); if(!sel)return;
+    const accounts=AccountStore.all(); sel.innerHTML=accounts.map(a=>`<option value="${this.escape(a.id)}">${this.escape(a.name)}</option>`).join(''); sel.value=AccountStore.activeId();
+    sel.onchange=()=>AccountStore.setActive(sel.value);
+    const add=$('#account-add'); if(add)add.onclick=()=>this.addTradingAccount();
   },
 
   // ---------- EVENT BINDING ----------
@@ -2697,6 +2769,27 @@ const UI = {
     </div>`;
   },
 
+  // ---------- TRADING ACCOUNTS ----------
+  addTradingAccount(){
+    const name=prompt('Account name (e.g. The5ers 100K)'); if(!name)return;
+    const broker=prompt('Broker / Prop Firm (optional)','')||'';
+    const type=prompt('Type (Prop / Personal)','Prop')||'Prop';
+    const bal=parseFloat(prompt('Starting balance USD (optional)','0')||'0')||0;
+    AccountStore.add({name,broker,type,initialBalance:bal}); toast('Trading account added','success');
+  },
+  manageTradingAccount(id){
+    const a=AccountStore.all().find(x=>x.id===id); if(!a)return;
+    const name=prompt('Account name',a.name); if(name===null)return;
+    const broker=prompt('Broker / Prop Firm',a.broker||''); if(broker===null)return;
+    AccountStore.update(id,{name:name.trim()||a.name,broker:broker.trim()}); toast('Account updated','success');
+  },
+  deleteTradingAccount(id){
+    const a=AccountStore.all().find(x=>x.id===id); if(!a)return;
+    if(AccountStore.all().length<=1){toast('Keep at least one trading account','error');return;}
+    if(!confirm(`Delete account "${a.name}"? Trades will remain in local backup but this account will disappear from the active workspace.`))return;
+    AccountStore.remove(id); toast('Account removed','success');
+  },
+
   // ---------- SETTINGS ----------
   renderSettings(){
     const s = Store.getSettings();
@@ -2749,6 +2842,15 @@ const UI = {
       </div>
     </div>`;
 
+    // Trading accounts
+    html += `<div class="section-title">Trading Accounts</div><div class="setting-group">`;
+    AccountStore.all().forEach(a=>{
+      const active=a.id===AccountStore.activeId();
+      const count=Store.getTradesForAccount ? Store.getTradesForAccount(a.id).length : 0;
+      html += `<div class="setting-row" style="align-items:center;gap:10px"><div style="min-width:0;flex:1"><div class="lbl">${this.escape(a.name)} ${active?'<span class="muted">· ACTIVE</span>':''}</div><div class="desc">${this.escape(a.broker||'No broker')} · ${this.escape(a.type||'Prop / Personal')} · ${count} trades</div></div><div class="ctrl" style="display:flex;gap:6px"><button class="btn btn-outline account-edit-btn" data-id="${this.escape(a.id)}" style="min-height:0;padding:8px 10px;font-size:12px">Edit</button>${AccountStore.all().length>1?`<button class="btn btn-danger account-delete-btn" data-id="${this.escape(a.id)}" style="min-height:0;padding:8px 10px;font-size:12px">Delete</button>`:''}</div></div>`;
+    });
+    html += `<div class="setting-row"><div><div class="lbl">Add trading account</div><div class="desc">Separate P&amp;L, trades and statistics per account</div></div><button class="btn btn-primary" id="btn-add-account" style="min-height:0;padding:8px 12px;font-size:12px">+ Add</button></div></div>`;
+
     // Data
     html += `<div class="section-title">Data Management</div>
     <div class="setting-group">
@@ -2777,7 +2879,7 @@ const UI = {
       <div class="detail-meta-list">
         <div class="meta-row"><span class="k">Total trades stored</span><span class="v">${trades.length}</span></div>
         <div class="meta-row"><span class="k">Storage used</span><span class="v">${this.storageSize()}</span></div>
-        <div class="meta-row"><span class="k">App version</span><span class="v">1.0.0</span></div>
+        <div class="meta-row"><span class="k">App version</span><span class="v">3.0.0 Multi-Account</span></div>
       </div>
     </div>`;
 
@@ -2810,6 +2912,10 @@ const UI = {
       const el = $('#' + id);
       if(el) el.addEventListener('change', () => { saveAccount(); toast('Saved'); });
     });
+
+    $('#btn-add-account').addEventListener('click',()=>this.addTradingAccount());
+    $$('.account-edit-btn').forEach(b=>b.addEventListener('click',()=>this.manageTradingAccount(b.dataset.id)));
+    $$('.account-delete-btn').forEach(b=>b.addEventListener('click',()=>this.deleteTradingAccount(b.dataset.id)));
 
     // export
     $('#btn-export-json').addEventListener('click', () => this.downloadFile('trading-journal-backup.json', Store.exportJSON(), 'application/json'));
@@ -2953,6 +3059,8 @@ const UI = {
       $('#sheet-title').textContent = 'Add Trade';
     }
 
+    $('#f-account').innerHTML = AccountStore.all().map(a=>`<option value="${this.escape(a.id)}">${this.escape(a.name)}</option>`).join('');
+    $('#f-account').value = (trade && trade.accountId) || AccountStore.activeId();
     $('#f-date').value = (trade && trade.date) || opts.date || todayStr();
     $('#f-pnl').value = trade ? Math.abs(trade.pnl).toFixed(2) : '';
     $('#f-symbol').value = (trade && trade.symbol) || '';
@@ -2979,6 +3087,7 @@ const UI = {
   },
 
   saveTradeFromForm(){
+    const accountId = $('#f-account').value || AccountStore.activeId();
     const date = $('#f-date').value;
     const pnlRaw = parseFloat($('#f-pnl').value);
     const result = this.state.sheetResult;
@@ -2991,7 +3100,7 @@ const UI = {
     const pnl = result === 'win' ? Math.abs(pnlRaw) : -Math.abs(pnlRaw);
 
     const payload = {
-      date, result, pnl, symbol, entryTime, notes,
+      accountId, date, result, pnl, symbol, entryTime, notes,
       timestamp: Date.now()
     };
 
